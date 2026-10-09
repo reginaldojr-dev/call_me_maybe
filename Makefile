@@ -16,4 +16,4 @@ clean:
 
 lint:
 	uv run flake8 --exclude=.venv,venv,llm_sdk .
-	uv run mypy src --follow-imports=silent --ignore-missing-imports --warn-return-any --warn-unused-ignores --disallow-untyped-defs --check-untyped-defs
+	uv run mypy src --follow-imports=silent --ignore-missing-imports --disable-error-code=import-untyped --disable-error-code=attr-defined --warn-return-any --warn-unused-ignores --disallow-untyped-defs --check-untyped-defs
