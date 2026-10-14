@@ -1,6 +1,6 @@
 from enum import Enum
 from pydantic import BaseModel, Field
-from errors.decoder_errors import JsonStateError, SchemaRulesError
+from src.errors.decoder_errors import JsonStateError, SchemaRulesError
 
 
 class JsonState(str, Enum):
@@ -24,13 +24,23 @@ class DecoderState(BaseModel):
     used_keys: set[str] = Field(default_factory=set)
     buffer: str = ""
 
-    def transition(
-        self,
-        json_state: JsonState,
-        current_key: str | None = None,
-        buffer: str = ""
-    ) -> "DecoderState":
-        
+    def set_json_state(self, state: JsonState) -> "DecoderState":
+        return self.model_copy(update={"json_state": state})
+
+    def append_buffer(self, text: str) -> "DecoderState":
+        return self.model_copy(update={"buffer": self.buffer + text})
+
+    def clear_buffer(self) -> "DecoderState":
+        return self.model_copy(update={"buffer": ""})
+
+    def set_current_key(self, key: str | None) -> "DecoderState":
+        return self.model_copy(update={"current_key": key})
+
+    def mark_key_as_used(self, key: str) -> "DecoderState":
+        new_used_keys = set(self.used_keys)
+        new_used_keys.add(key)
+        return self.model_copy(update={"used_keys": new_used_keys})
+
 
 def next_state(
     state: DecoderState,
@@ -39,35 +49,39 @@ def next_state(
 ) -> DecoderState:
     if state.json_state == JsonState.START:
         if token == "{":
-            return DecoderState(
-                json_state=JsonState.EXPECT_KEY,
-                current_key=state.current_key,
-                used_keys=state.used_keys,
-                buffer=""
-            )
-    raise JsonStateError(
-        f"Unexpected token {token!r} in state {state.json_state}"
-    )
+            return state.set_json_state(JsonState.EXPECT_KEY)
 
-    if state.json_state == JsonState.EXPECT_KEY and token.startswith('"'):
-        return DecoderState(json_state=JsonState.EXPECT_COLON)
+    if state.json_state == JsonState.EXPECT_KEY:
+        if len(token) >= 2 and token.startswith('"') and token.endswith('"'):
+            state = state.set_current_key(token.strip('"'))
+            state = state.clear_buffer()
+            return state.set_json_state(JsonState.EXPECT_COLON)
+        if token.endswith('"'):
+            state_buffer_att = state.append_buffer(token)
+            state = state.set_current_key(state_buffer_att.buffer.strip('"'))
+            state = state.clear_buffer()
+            return state.set_json_state(JsonState.EXPECT_COLON)
+        if not token.endswith('"'):
+            state = state.append_buffer(token)
+            return state.set_json_state(JsonState.EXPECT_KEY)
 
-    if state.json_state == JsonState.EXPECT_COLON and token == ":":
-        return DecoderState(json_state=JsonState.EXPECT_VALUE)
+    if state.json_state == JsonState.EXPECT_COLON:
+        if token == ":":
+            return state.set_json_state(JsonState.EXPECT_VALUE)
 
     if state.json_state == JsonState.EXPECT_VALUE:
-        if token.startswith('"'):
-            return DecoderState(json_state=JsonState.EXPECT_COMMA_OR_END)
+        if token == '"':
+            return state.set_json_state(JsonState.EXPECT_COMMA_OR_END)
         if token.lstrip("-").replace(".", "", 1).isdigit():
-            return DecoderState(json_state=JsonState.EXPECT_COMMA_OR_END)
+            return state.set_json_state(JsonState.EXPECT_COMMA_OR_END)
         if token in ("true", "false"):
-            return DecoderState(json_state=JsonState.EXPECT_COMMA_OR_END)
+            return state.set_json_state(JsonState.EXPECT_COMMA_OR_END)
 
     if state.json_state == JsonState.EXPECT_COMMA_OR_END:
         if token == ",":
-            return DecoderState(json_state=JsonState.EXPECT_KEY)
+            return state.set_json_state(JsonState.EXPECT_KEY)
         if token == "}":
-            return DecoderState(json_state=JsonState.DONE)
+            return state.set_json_state(JsonState.DONE)
 
     raise JsonStateError(
         f"Unexpected token {token!r} in state {state}"
