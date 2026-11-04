@@ -47,8 +47,7 @@ def next_state(
     token: str,
     expected_type: str | None = None
 ) -> DecoderState:
-    if state.json_state == JsonState.START:
-        if token == "{":
+    if state.json_state == JsonState.START and token == "{":
             return state.set_json_state(JsonState.EXPECT_KEY)
 
     if state.json_state == JsonState.EXPECT_KEY:
@@ -65,17 +64,22 @@ def next_state(
             state = state.append_buffer(token)
             return state.set_json_state(JsonState.EXPECT_KEY)
 
-    if state.json_state == JsonState.EXPECT_COLON:
-        if token == ":":
+    if state.json_state == JsonState.EXPECT_COLON and token == ":":
             return state.set_json_state(JsonState.EXPECT_VALUE)
 
     if state.json_state == JsonState.EXPECT_VALUE:
-        if token == '"':
-            return state.set_json_state(JsonState.EXPECT_COMMA_OR_END)
-        if token.lstrip("-").replace(".", "", 1).isdigit():
-            return state.set_json_state(JsonState.EXPECT_COMMA_OR_END)
-        if token in ("true", "false"):
-            return state.set_json_state(JsonState.EXPECT_COMMA_OR_END)
+        candidate = state.buffer + token
+        status = validate_value(candidate, expected_type)
+
+        if status == ValidationState.VALID:
+            state_updated = state
+            if state.current_key:
+                state_updated = state_updated.mark_key_as_used(state.current_key)
+            state_updated= state_updated.set_current_key(None).clear_buffer()
+            return state.updated.set_json_state(JsonState.EXPECT_COMMA_OR_END)
+
+        if status == ValidationState.POSSIBLE:
+            return state.append_buffer(token)
 
     if state.json_state == JsonState.EXPECT_COMMA_OR_END:
         if token == ",":

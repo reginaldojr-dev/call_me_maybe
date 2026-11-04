@@ -1,7 +1,8 @@
-from src.models.function_definition import FunctionDefinition
-from src.errors.decoder_errors import SchemaRulesError
-from src.decoder.json_state import DecoderState
 from pydantic import BaseModel
+
+from src.decoder.json_state import DecoderState
+from src.errors.decoder_errors import SchemaRulesError
+from src.models.function_definition import FunctionDefinition
 
 
 class SchemaRules(BaseModel):
