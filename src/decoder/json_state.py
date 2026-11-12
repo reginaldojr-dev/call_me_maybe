@@ -48,7 +48,7 @@ def next_state(
     expected_type: str | None = None
 ) -> DecoderState:
     if state.json_state == JsonState.START and token == "{":
-            return state.set_json_state(JsonState.EXPECT_KEY)
+        return state.set_json_state(JsonState.EXPECT_KEY)
 
     if state.json_state == JsonState.EXPECT_KEY:
         if len(token) >= 2 and token.startswith('"') and token.endswith('"'):
@@ -65,18 +65,22 @@ def next_state(
             return state.set_json_state(JsonState.EXPECT_KEY)
 
     if state.json_state == JsonState.EXPECT_COLON and token == ":":
-            return state.set_json_state(JsonState.EXPECT_VALUE)
+        return state.set_json_state(JsonState.EXPECT_VALUE)
 
     if state.json_state == JsonState.EXPECT_VALUE:
         candidate = state.buffer + token
+        if expected_type is None:
+            raise JsonStateError(
+                "Expected type is None while expecting a value"
+            )
         status = validate_value(candidate, expected_type)
 
         if status == ValidationState.VALID:
-            state_updated = state
+            state_uptd = state
             if state.current_key:
-                state_updated = state_updated.mark_key_as_used(state.current_key)
-            state_updated= state_updated.set_current_key(None).clear_buffer()
-            return state.updated.set_json_state(JsonState.EXPECT_COMMA_OR_END)
+                state_uptd = state_uptd.mark_key_as_used(state.current_key)
+            state_uptd = state_uptd.set_current_key(None).clear_buffer()
+            return state_uptd.set_json_state(JsonState.EXPECT_COMMA_OR_END)
 
         if status == ValidationState.POSSIBLE:
             return state.append_buffer(token)
