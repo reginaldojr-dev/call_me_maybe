@@ -1,10 +1,9 @@
+"""Custom exception classes for JSON state machine and schema rule errors."""
+
+
 class JsonStateError(Exception):
-    pass
+    """Raised when a token violates JSON syntax or state transitions."""
 
 
 class SchemaRulesError(Exception):
-    pass
-
-
-class ValidationStateError(Exception):
-    pass
+    """Raised when a key or type violates the function schema rules."""

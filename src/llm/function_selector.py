@@ -1,154 +1,153 @@
-from src.models.function_definition import FunctionDefinition
-from llm_sdk import Small_LLM_Model
-from src.llm.model import (encode_text, get_next_token_logits,
-                           get_best_token_id)
+"""Constrained prefix decoding for selecting a function with the LLM."""
+
+from llm_sdk.llm_sdk import Small_LLM_Model
+
 from src.errors.functions_selection_errors import FunctionSelectionError
+from src.llm.model import encode_text, get_best_token_id, get_next_token_logits
+from src.models.function_definition import FunctionDefinition
 
 
-def build_function_context(
-    functions: list[FunctionDefinition]
-) -> str:
-    context = ""
-    for function in functions:
-        context += (
-            f"{function.name}, {function.description},"
-            f"{function.parameters}\n"
+def build_function_context(functions: list[FunctionDefinition]) -> str:
+    """Format available function definitions into a readable text catalog."""
+    lines: list[str] = []
+    for func in functions:
+        params = ", ".join(
+            f"{name}: {param.type}"
+            for name, param in func.parameters.items()
         )
-    return context
+        line = (
+            f"- {func.name}({params}) -> {func.returns.type}: "
+            f"{func.description}"
+        )
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def build_function_prompt(
-    context: str,
-    prompt: str
+    prompt: str,
+    functions: list[FunctionDefinition],
 ) -> str:
+    """Build the prompt asking the LLM to choose one function name."""
+    context = build_function_context(functions)
     return (
-        "Choose the function that best matches the user's request.\n"
-        "Return only the exact function name from the available functions.\n\n"
-        "Available functions:\n"
-        f"{context}\n"
+        "Select the correct function for the user request.\n\n"
+        f"Available functions:\n{context}\n\n"
         f"User request: {prompt}\n"
-        "Function:"
-        )
+        "Function name: "
+    )
 
 
 def tokenize_function_names(
     model: Small_LLM_Model,
-    functions: list[FunctionDefinition]
+    functions: list[FunctionDefinition],
 ) -> dict[str, list[int]]:
-    function_tokens = {
-            function.name: encode_text(model, " " + function.name + "\n")
-            for function in functions
-        }
-    return function_tokens
+    """Encode each candidate function name into its list of token IDs."""
+    return {func.name: encode_text(model, func.name) for func in functions}
 
 
 def get_valid_token_ids(
-    remaining_functions,
-    position
+    remaining_functions: dict[str, list[int]],
+    position: int,
 ) -> set[int]:
-    return {
-        tokens[position]
-        for tokens in remaining_functions.values()
-        if position < len(tokens)
-    }
+    """Return the set of valid token IDs at the current prefix position."""
+    valid_token_ids: set[int] = set()
+
+    for token_ids in remaining_functions.values():
+        if position < len(token_ids):
+            valid_token_ids.add(token_ids[position])
+
+    return valid_token_ids
 
 
 def mask_invalid_logits(
     logits: list[float],
-    valid_token_ids: set[int]
+    valid_token_ids: set[int],
 ) -> list[float]:
+    """Mask logits by setting disallowed token IDs to negative infinity."""
     return [
-        logit if token_id in valid_token_ids else float("-inf")
-        for token_id, logit in enumerate(logits)
+        logit if index in valid_token_ids else float("-inf")
+        for index, logit in enumerate(logits)
     ]
 
 
 def filter_remaining_functions(
     remaining_functions: dict[str, list[int]],
     position: int,
-    best_token_id: int
+    chosen_token_id: int,
 ) -> dict[str, list[int]]:
+    """Keep only candidate functions matching chosen_token_id at position."""
     return {
-        name: tokens
-        for name, tokens in remaining_functions.items()
-        if (
-            position < len(tokens)
-            and tokens[position] == best_token_id
-            )
+        name: token_ids
+        for name, token_ids in remaining_functions.items()
+        if position < len(token_ids)
+        and token_ids[position] == chosen_token_id
     }
 
 
 def get_completed_function(
     remaining_functions: dict[str, list[int]],
-    position: int
+    chosen_tokens: list[int],
 ) -> str | None:
-    completed = [
-        name
-        for name, tokens in remaining_functions.items()
-        if position == len(tokens)
-    ]
-
-    if completed:
-        return completed[0]
-
+    """Return the function name if chosen_tokens matches a complete name."""
+    for name, token_ids in remaining_functions.items():
+        if token_ids == chosen_tokens:
+            return name
     return None
 
 
 def select_function_with_llm(
     model: Small_LLM_Model,
     prompt: str,
-    functions: list[FunctionDefinition]
+    functions: list[FunctionDefinition],
 ) -> str:
-    context = build_function_context(functions)
-    full_prompt = build_function_prompt(context, prompt)
+    """Select the best function name for prompt using constrained logits."""
+    if not functions:
+        raise FunctionSelectionError("functions list cannot be empty")
+    if not prompt.strip():
+        raise FunctionSelectionError("prompt cannot be empty")
 
-    prompt_tokens = encode_text(model, full_prompt)
+    selection_prompt = build_function_prompt(prompt, functions)
+    input_ids = encode_text(model, selection_prompt)
+    remaining_functions = tokenize_function_names(model, functions)
 
-    function_tokens = tokenize_function_names(model, functions)
-
-    remaining_functions = function_tokens
-    selected_tokens: list[int] = []
+    chosen_tokens: list[int] = []
+    position = 0
 
     while remaining_functions:
-        position = len(selected_tokens)
+        valid_token_ids = get_valid_token_ids(remaining_functions, position)
+        if not valid_token_ids:
+            break
+
+        logits = get_next_token_logits(model, input_ids + chosen_tokens)
+        masked_logits = mask_invalid_logits(logits, valid_token_ids)
+        chosen_token_id = get_best_token_id(masked_logits)
+
+        chosen_tokens.append(chosen_token_id)
+        remaining_functions = filter_remaining_functions(
+            remaining_functions, position, chosen_token_id
+        )
 
         completed_function = get_completed_function(
-            remaining_functions,
-            position
+            remaining_functions, chosen_tokens
         )
         if completed_function is not None:
             return completed_function
-
-        valid_token_ids = get_valid_token_ids(
-            remaining_functions,
-            position
-        )
-
-        logits = get_next_token_logits(
-            model,
-            prompt_tokens + selected_tokens
-        )
-
-        masked_logits = mask_invalid_logits(logits, valid_token_ids)
-
-        best_token_id = get_best_token_id(masked_logits)
-        selected_tokens.append(best_token_id)
-
-        remaining_functions = filter_remaining_functions(
-            remaining_functions, position, best_token_id
-        )
+        position += 1
 
     raise FunctionSelectionError("LLM could not select a valid function")
 
 
 def validate_selected_function(
-    selected_name: str,
-    functions: list[FunctionDefinition]
+    function_name: str,
+    functions: list[FunctionDefinition],
 ) -> FunctionDefinition:
+    """Return the FunctionDefinition matching function_name or raise error."""
+    cleaned_name = function_name.strip()
+    if not cleaned_name:
+        raise FunctionSelectionError("Selected function name cannot be empty")
     for function in functions:
-        if function.name == selected_name:
+        if function.name == cleaned_name:
             return function
-
     raise FunctionSelectionError(
-        "LLM could not select a valid function"
+        f"Selected function '{cleaned_name}' does not exist"
     )

@@ -1,2 +1,5 @@
+"""Custom exception class for LLM function selection failures."""
+
+
 class FunctionSelectionError(Exception):
-    pass
+    """Raised when the LLM fails to select a valid function definition."""

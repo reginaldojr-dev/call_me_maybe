@@ -1,11 +1,17 @@
+"""Token filtering and logit masking for constrained JSON decoding."""
+
 from src.decoder.json_state import DecoderState, JsonState, next_state
 from src.decoder.schema_rules import SchemaRules
 from src.errors.decoder_errors import JsonStateError
+from src.llm.model import get_best_token_id
 
 
 def is_token_allowed(
-    state: DecoderState, token: str, schema_rules: SchemaRules
+    state: DecoderState,
+    token: str,
+    schema_rules: SchemaRules,
 ) -> bool:
+    """Check if a token preserves valid JSON syntax and schema compliance."""
     if state.json_state == JsonState.EXPECT_VALUE:
         expected_type = schema_rules.get_expected_type(state)
     else:
@@ -15,6 +21,15 @@ def is_token_allowed(
         new_state = next_state(state, token, expected_type)
     except JsonStateError:
         return False
+
+    if new_state.json_state == JsonState.EXPECT_KEY:
+        missing = schema_rules.get_missing_parameters(new_state)
+        if not missing:
+            return False
+        if new_state.buffer.startswith('"'):
+            key_prefix = new_state.buffer[1:]
+            if not any(key.startswith(key_prefix) for key in missing):
+                return False
 
     if new_state.json_state == JsonState.EXPECT_COLON:
         if new_state.current_key is None:
@@ -34,9 +49,12 @@ def is_token_allowed(
 
 
 def get_allowed_tokens(
-    state: DecoderState, schema_rules: SchemaRules, vocab: dict[str, int]
+    state: DecoderState,
+    schema_rules: SchemaRules,
+    vocab: dict[str, int],
 ) -> list[int]:
-    allowed_tokens = []
+    """Return all token IDs from vocab allowed in the current state."""
+    allowed_tokens: list[int] = []
     for token, token_id in vocab.items():
         if is_token_allowed(state, token, schema_rules):
             allowed_tokens.append(token_id)
@@ -47,16 +65,18 @@ def mask_logits(
     state: DecoderState,
     schema_rules: SchemaRules,
     logits: list[float],
-    vocab: dict[str, int]
+    vocab: dict[str, int],
 ) -> list[float]:
+    """Set logits of invalid tokens to negative infinity."""
     allowed_token_ids = set(get_allowed_tokens(state, schema_rules, vocab))
-    masked_logits = [
+    if not allowed_token_ids:
+        raise JsonStateError("No valid tokens available for current state.")
+    return [
         logit if token_id in allowed_token_ids else float("-inf")
         for token_id, logit in enumerate(logits)
     ]
-    return masked_logits
 
 
 def select_next_token(logits: list[float]) -> int:
-    max_logit = max(logits)
-    return logits.index(max_logit)
+    """Select the token ID with the highest logit score."""
+    return get_best_token_id(logits)
