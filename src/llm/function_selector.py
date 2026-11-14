@@ -1,6 +1,6 @@
 """Constrained prefix decoding for selecting a function with the LLM."""
 
-from llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
 
 from src.errors.functions_selection_errors import FunctionSelectionError
 from src.llm.model import encode_text, get_best_token_id, get_next_token_logits

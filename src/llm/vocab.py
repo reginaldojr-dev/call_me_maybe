@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
 
 from src.input.loader import load_file
 from src.input.parser import parse_json

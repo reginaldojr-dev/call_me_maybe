@@ -1,6 +1,6 @@
 """Wrapper functions around the public Small_LLM_Model SDK interface."""
 
-from llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
 
 
 def encode_text(model: Small_LLM_Model, text: str) -> list[int]:

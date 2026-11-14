@@ -3,7 +3,7 @@
 import json
 from typing import Any
 
-from llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
 
 from src.decoder.json_state import DecoderState, JsonState, next_state
 from src.decoder.schema_rules import SchemaRules
