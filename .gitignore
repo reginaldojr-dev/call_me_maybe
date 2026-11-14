@@ -1,2 +1,22 @@
+# Python artifacts
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# Type checking and test caches
+.mypy_cache/
+.pytest_cache/
+
+# Generated output (must not be submitted in the repository)
+data/output/
+output/
+
+# OS files
+.DS_Store
