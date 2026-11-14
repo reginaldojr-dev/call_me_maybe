@@ -69,7 +69,6 @@ make run
 * `make debug`: Run the main script in interactive debug mode using `pdb`.
 * `make clean`: Remove temporary caches (`__pycache__`, `.mypy_cache`, `.pytest_cache`).
 * `make lint`: Run `flake8` and `mypy` with all mandatory flags required by the subject.
-* `make lint-strict`: Run `flake8` and `mypy --strict`.
 
 ---
 
@@ -194,7 +193,7 @@ uv run python -m src \
     "prompt": "Reverse the string 'hello'",
     "name": "fn_reverse_string",
     "parameters": {
-      "s": "hello"
+      "text": "hello"
     }
   }
 ]
