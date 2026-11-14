@@ -33,6 +33,12 @@ Small language models often struggle to spontaneously produce valid JSON when re
 
 ### Installation
 
+> **Note for 42 campus machines (limited home quota):** If your home directory has limited disk quota, redirect the `uv` and Hugging Face caches to `/sgoinfre` or `/tmp` before running `uv sync`:
+> ```bash
+> export UV_CACHE_DIR=/sgoinfre/$USER/.cache/uv
+> export HF_HOME=/sgoinfre/$USER/.cache/huggingface
+> ```
+
 Synchronize the virtual environment and install all required dependencies (`pydantic`, `numpy`, `llm_sdk`, `flake8`, `mypy`):
 
 ```bash
