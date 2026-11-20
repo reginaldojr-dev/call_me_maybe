@@ -38,7 +38,7 @@ def generate_parameters(
     vocab: dict[str, int],
     schema_rules: SchemaRules,
     prompt: str,
-    max_tokens: int = 128,
+    max_tokens: int = 512,
 ) -> dict[str, Any]:
     """Generate a valid JSON dictionary of parameters token by token."""
     state = DecoderState(json_state=JsonState.START)
@@ -60,7 +60,14 @@ def generate_parameters(
             if state.json_state == JsonState.EXPECT_VALUE
             else None
         )
-        state = next_state(state, next_token, expected_type)
+
+        new_state = next_state(state, next_token, expected_type)
+        if new_state is None:
+            raise JsonStateError(
+                f"mask_logits allowed token {next_token!r} but next_state "
+                "rejected it; the two implementations disagree."
+            )
+        state = new_state
         generated_text += next_token
 
     if state.json_state != JsonState.DONE:

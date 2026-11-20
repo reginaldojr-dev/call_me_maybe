@@ -24,8 +24,14 @@ from src.llm.function_selector import (
     validate_selected_function,
 )
 from src.llm.vocab import get_vocab_path, load_vocab
-from src.models.function_definition import validate_functions
-from src.models.prompt_definition import validate_prompts
+from src.models.function_definition import (
+    FunctionDefinition,
+    validate_functions,
+)
+from src.models.prompt_definition import (
+    PromptDefinition,
+    validate_prompts,
+)
 from src.output.validator import validate_output
 from src.output.writer import write_output
 
@@ -68,6 +74,46 @@ def normalize_vocab(raw_vocab: dict[str, int]) -> dict[str, int]:
     return normalized
 
 
+def process_prompt(
+    model: Small_LLM_Model,
+    vocab: dict[str, int],
+    item: PromptDefinition,
+    functions: list[FunctionDefinition],
+) -> dict[str, Any]:
+    """Process a single prompt into a validated function call result.
+
+    Raises:
+        FunctionSelectionError: if no function could be selected.
+        JsonStateError: if constrained decoding fails.
+        SchemaRulesError: if the schema contains unsupported types.
+        OutputError: if the result does not match the schema.
+    """
+    selected_name = select_function_with_llm(
+        model, item.prompt, functions
+    )
+    selected_function = validate_selected_function(
+        selected_name, functions
+    )
+    schema_rules = SchemaRules.from_function(selected_function)
+
+    parameters_prompt = build_parameters_prompt(
+        selected_function, item.prompt
+    )
+    parameters = generate_parameters(
+        llm=model,
+        vocab=vocab,
+        schema_rules=schema_rules,
+        prompt=parameters_prompt,
+    )
+
+    call_result: dict[str, Any] = {
+        "prompt": item.prompt,
+        "name": selected_function.name,
+        "parameters": parameters,
+    }
+    return validate_output(call_result, schema_rules)
+
+
 def main() -> None:
     """Execute the complete constrained function calling pipeline."""
     args = parse_args()
@@ -84,49 +130,34 @@ def main() -> None:
         model = Small_LLM_Model()
         raw_vocab = load_vocab(get_vocab_path(model))
         vocab = normalize_vocab(raw_vocab)
-
-        results: list[dict[str, Any]] = []
-        for item in prompts:
-            selected_name = select_function_with_llm(
-                model, item.prompt, functions
-            )
-            selected_function = validate_selected_function(
-                selected_name, functions
-            )
-            schema_rules = SchemaRules.from_function(selected_function)
-
-            parameters_prompt = build_parameters_prompt(
-                selected_function, item.prompt
-            )
-            parameters = generate_parameters(
-                llm=model,
-                vocab=vocab,
-                schema_rules=schema_rules,
-                prompt=parameters_prompt,
-            )
-
-            call_result: dict[str, Any] = {
-                "prompt": item.prompt,
-                "name": selected_function.name,
-                "parameters": parameters,
-            }
-            validated_result = validate_output(call_result, schema_rules)
-            results.append(validated_result)
-
-        write_output(results, args.output)
     except (
         InputFileError,
         InvalidJsonError,
         ValidationError,
-        FunctionSelectionError,
-        JsonStateError,
-        SchemaRulesError,
-        OutputError,
     ) as error:
         print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
-    except Exception as error:
-        print(f"Unexpected error: {error}", file=sys.stderr)
+
+    results: list[dict[str, Any]] = []
+    for item in prompts:
+        try:
+            results.append(process_prompt(model, vocab, item, functions))
+        except (
+            FunctionSelectionError,
+            JsonStateError,
+            SchemaRulesError,
+            OutputError,
+        ) as error:
+            print(
+                f"Warning: skipped prompt {item.prompt!r}: {error}",
+                file=sys.stderr,
+            )
+            continue
+
+    try:
+        write_output(results, args.output)
+    except OutputError as error:
+        print(f"Error: {error}", file=sys.stderr)
         sys.exit(1)
 
 

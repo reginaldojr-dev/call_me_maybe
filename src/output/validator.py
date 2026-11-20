@@ -47,6 +47,7 @@ def validate_output(
             "string": str,
             "number": float,
             "boolean": bool,
+            "null": type(None),
         }
         if expected_type not in mapping_dict:
             raise OutputError(

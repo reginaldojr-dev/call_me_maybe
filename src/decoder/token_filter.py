@@ -2,7 +2,6 @@
 
 from src.decoder.json_state import DecoderState, JsonState, next_state
 from src.decoder.schema_rules import SchemaRules
-from src.errors.decoder_errors import JsonStateError
 from src.llm.model import get_best_token_id
 
 
@@ -17,9 +16,8 @@ def is_token_allowed(
     else:
         expected_type = None
 
-    try:
-        new_state = next_state(state, token, expected_type)
-    except JsonStateError:
+    new_state = next_state(state, token, expected_type)
+    if new_state is None:
         return False
 
     if new_state.json_state == JsonState.EXPECT_KEY:

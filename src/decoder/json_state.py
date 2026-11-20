@@ -1,6 +1,7 @@
 """JSON state machine and partial value validators for constrained decoding."""
 
 from enum import Enum
+from typing import ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -57,6 +58,20 @@ class DecoderState(BaseModel):
         return self.model_copy(update={"used_keys": new_used_keys})
 
 
+class JsonRules(BaseModel):
+    """Static validation rules for JSON tokens.
+
+    Constants are declared as ``ClassVar`` so Pydantic does not treat them
+    as model fields.
+    """
+
+    SIMPLE_ESCAPES: ClassVar[frozenset[str]] = frozenset('"\\/bfnrt')
+    HEX_DIGITS: ClassVar[frozenset[str]] = frozenset(
+        "0123456789abcdefABCDEF"
+    )
+    ASCII_DIGITS: ClassVar[frozenset[str]] = frozenset("0123456789")
+
+
 def _finalize_value(
     state: DecoderState,
     next_json_state: JsonState,
@@ -76,22 +91,30 @@ def next_state(
     state: DecoderState,
     token: str,
     expected_type: str | None = None,
-) -> DecoderState:
-    """Advance the JSON state machine given the
-    current state and next token."""
+) -> DecoderState | None:
+    """Advance the JSON state machine given the current state and next token.
+
+    Returns a new ``DecoderState`` when the token is acceptable, or ``None``
+    when the token would break JSON structure or the expected schema. Raising
+    exceptions is reserved for programming errors (e.g. missing
+    ``expected_type`` while a value is required).
+    """
     if token == "":
-        raise JsonStateError("Empty token is not allowed")
+        return None
 
     clean_token = token.lstrip(" ") if state.buffer == "" else token
     if clean_token == "":
-        raise JsonStateError("Whitespace-only token is not allowed")
+        return None
 
-    if state.json_state == JsonState.START and clean_token == "{":
-        return state.set_json_state(JsonState.EXPECT_KEY)
+    if state.json_state == JsonState.START:
+        if clean_token == "{":
+            return state.set_json_state(JsonState.EXPECT_KEY)
+        return None
 
     if state.json_state == JsonState.EXPECT_KEY:
-        if state.buffer == "" and not state.used_keys and clean_token == "}":
-            return state.set_json_state(JsonState.DONE)
+        if state.buffer == "" and not state.used_keys:
+            if clean_token.strip() == "}":
+                return state.set_json_state(JsonState.DONE)
         candidate = state.buffer + clean_token
         key_status = validate_string(candidate)
         if key_status == ValidationState.VALID:
@@ -103,9 +126,12 @@ def next_state(
             )
         if key_status == ValidationState.POSSIBLE:
             return state.append_buffer(clean_token)
+        return None
 
-    if state.json_state == JsonState.EXPECT_COLON and clean_token == ":":
-        return state.set_json_state(JsonState.EXPECT_VALUE)
+    if state.json_state == JsonState.EXPECT_COLON:
+        if clean_token.strip() == ":":
+            return state.set_json_state(JsonState.EXPECT_VALUE)
+        return None
 
     if state.json_state == JsonState.EXPECT_VALUE:
         if expected_type is None:
@@ -117,7 +143,8 @@ def next_state(
             stripped = token.lstrip(" ")
             if (
                 stripped in (",", "}")
-                and validate_number(state.buffer) == ValidationState.VALID
+                and validate_number(state.buffer)
+                == ValidationState.VALID
             ):
                 target = (
                     JsonState.EXPECT_KEY
@@ -132,73 +159,122 @@ def next_state(
         if status == ValidationState.VALID:
             if expected_type == "number":
                 return state.append_buffer(clean_token)
-            return _finalize_value(state, JsonState.EXPECT_COMMA_OR_END)
+            return _finalize_value(
+                state, JsonState.EXPECT_COMMA_OR_END
+            )
 
         if status == ValidationState.POSSIBLE:
             return state.append_buffer(clean_token)
 
-    if state.json_state == JsonState.EXPECT_COMMA_OR_END:
-        if clean_token == ",":
-            return state.set_json_state(JsonState.EXPECT_KEY)
-        if clean_token == "}":
-            return state.set_json_state(JsonState.DONE)
+        return None
 
-    raise JsonStateError(
-        f"Unexpected token {token!r} in state {state.json_state.value}"
-    )
+    if state.json_state == JsonState.EXPECT_COMMA_OR_END:
+        stripped = clean_token.strip()
+        if stripped == ",":
+            return state.set_json_state(JsonState.EXPECT_KEY)
+        if stripped == "}":
+            return state.set_json_state(JsonState.DONE)
+        return None
+
+    return None
 
 
 def validate_string(value: str) -> ValidationState:
-    """Validate whether value is a complete or partial JSON string."""
+    """Validate whether value is a complete or partial JSON string.
+
+    Returns:
+        VALID: the value is a complete, well-formed JSON string.
+        POSSIBLE: the value is a prefix of a valid JSON string.
+        INVALID: the value can never become a valid JSON string.
+    """
     if not value.startswith('"'):
         return ValidationState.INVALID
-    if "\n" in value or "\r" in value or "\t" in value:
-        return ValidationState.INVALID
 
-    escaped = False
-    quote_positions: list[int] = []
-    for index, char in enumerate(value):
-        if escaped:
-            escaped = False
-            continue
-        if char == "\\":
-            escaped = True
-            continue
-        if char == '"':
-            quote_positions.append(index)
+    i = 1
+    n = len(value)
 
-    if escaped:
-        return ValidationState.POSSIBLE
-    if len(quote_positions) == 1:
-        return ValidationState.POSSIBLE
-    if len(quote_positions) == 2 and quote_positions[1] == len(value) - 1:
-        return ValidationState.VALID
-    return ValidationState.INVALID
+    while i < n:
+        ch = value[i]
+
+        if ord(ch) < 0x20:
+            return ValidationState.INVALID
+
+        if ch == '"':
+            return (
+                ValidationState.VALID
+                if i == n - 1
+                else ValidationState.INVALID
+            )
+
+        if ch == "\\":
+            if i + 1 >= n:
+                return ValidationState.POSSIBLE
+
+            esc = value[i + 1]
+
+            if esc in JsonRules.SIMPLE_ESCAPES:
+                i += 2
+                continue
+
+            if esc == "u":
+                hex_part = value[i + 2:i + 6]
+                if len(hex_part) < 4:
+                    if all(c in JsonRules.HEX_DIGITS for c in hex_part):
+                        return ValidationState.POSSIBLE
+                    return ValidationState.INVALID
+                if not all(c in JsonRules.HEX_DIGITS for c in hex_part):
+                    return ValidationState.INVALID
+                i += 6
+                continue
+
+            return ValidationState.INVALID
+
+        i += 1
+
+    return ValidationState.POSSIBLE
 
 
 def validate_number(value: str) -> ValidationState:
-    """Validate whether value is a complete or partial JSON number."""
+    """Validate whether value is a complete or partial JSON number.
+
+    Accepts only ASCII digits, rejects leading zeros (except for ``0``
+    itself), and supports partial prefixes used during constrained decoding.
+
+    Returns:
+        VALID: the value is a complete, well-formed JSON number.
+        POSSIBLE: the value is a prefix of a valid JSON number.
+        INVALID: the value can never become a valid JSON number.
+    """
+    if value == "":
+        return ValidationState.INVALID
     if value == "-":
         return ValidationState.POSSIBLE
 
-    number = value[1:] if value.startswith("-") else value
-
-    if not number or number.count(".") > 1:
+    body = value[1:] if value.startswith("-") else value
+    if body == "":
         return ValidationState.INVALID
 
-    if number.endswith("."):
-        prefix = number[:-1]
-        if prefix.isdigit():
-            return ValidationState.POSSIBLE
+    if "." in body:
+        int_part, _, frac_part = body.partition(".")
+        if "." in frac_part:
+            return ValidationState.INVALID
+    else:
+        int_part, frac_part = body, None
+
+    if not int_part:
+        return ValidationState.INVALID
+    if int_part != "0" and int_part.startswith("0"):
+        return ValidationState.INVALID
+    if not all(c in JsonRules.ASCII_DIGITS for c in int_part):
         return ValidationState.INVALID
 
-    if "." in number:
-        number = number.replace(".", "", 1)
-
-    if number.isdigit():
+    if frac_part is None:
         return ValidationState.VALID
-
-    return ValidationState.INVALID
+    if frac_part == "":
+        return ValidationState.POSSIBLE
+    if not all(c in JsonRules.ASCII_DIGITS for c in frac_part):
+        return ValidationState.INVALID
+    return ValidationState.VALID
 
 
 def validate_boolean(value: str) -> ValidationState:
@@ -210,12 +286,29 @@ def validate_boolean(value: str) -> ValidationState:
     return ValidationState.INVALID
 
 
+def validate_null(value: str) -> ValidationState:
+    """Validate whether value is a complete or partial JSON null."""
+    if value == "null":
+        return ValidationState.VALID
+    if value in ("n", "nu", "nul"):
+        return ValidationState.POSSIBLE
+    return ValidationState.INVALID
+
+
 def validate_value(value: str, expected_type: str) -> ValidationState:
-    """Validate a candidate value against the expected schema type."""
+    """Validate a candidate value against the expected schema type.
+
+    Raises:
+        SchemaRulesError: if ``expected_type`` is not a supported type.
+    """
     if expected_type == "string":
         return validate_string(value)
     if expected_type == "number":
         return validate_number(value)
     if expected_type == "boolean":
         return validate_boolean(value)
-    raise SchemaRulesError(f"Unsupported parameter type: {expected_type}")
+    if expected_type == "null":
+        return validate_null(value)
+    raise SchemaRulesError(
+        f"Unsupported parameter type: {expected_type}"
+    )
