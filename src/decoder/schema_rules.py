@@ -18,10 +18,9 @@ class SchemaRules(BaseModel):
         function: FunctionDefinition,
     ) -> "SchemaRules":
         """Create SchemaRules from a FunctionDefinition instance."""
-        type_aliases = {"integer": "number"}
         return cls(
             parameters={
-                name: type_aliases.get(parameter.type, parameter.type)
+                name: parameter.type
                 for name, parameter in function.parameters.items()
             }
         )

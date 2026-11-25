@@ -139,11 +139,11 @@ def next_state(
                 "Expected type is None while expecting a value"
             )
 
-        if expected_type == "number" and state.buffer != "":
+        if expected_type in ("number", "integer") and state.buffer != "":
             stripped = token.lstrip(" ")
             if (
                 stripped in (",", "}")
-                and validate_number(state.buffer)
+                and validate_value(state.buffer, expected_type)
                 == ValidationState.VALID
             ):
                 target = (
@@ -157,11 +157,9 @@ def next_state(
         status = validate_value(candidate, expected_type)
 
         if status == ValidationState.VALID:
-            if expected_type == "number":
+            if expected_type in ("number", "integer"):
                 return state.append_buffer(clean_token)
-            return _finalize_value(
-                state, JsonState.EXPECT_COMMA_OR_END
-            )
+            return _finalize_value(state, JsonState.EXPECT_COMMA_OR_END)
 
         if status == ValidationState.POSSIBLE:
             return state.append_buffer(clean_token)
@@ -277,6 +275,34 @@ def validate_number(value: str) -> ValidationState:
     return ValidationState.VALID
 
 
+def validate_integer(value: str) -> ValidationState:
+    """Validate whether value is a complete or partial JSON integer.
+
+    Accepts only ASCII digits with an optional leading minus sign.
+    Rejects decimals, exponents, leading zeros and Unicode digits.
+
+    Returns:
+        VALID: the value is a complete, well-formed JSON integer.
+        POSSIBLE: the value is a prefix of a valid JSON integer.
+        INVALID: the value can never become a valid JSON integer.
+    """
+    if value == "":
+        return ValidationState.INVALID
+    if value == "-":
+        return ValidationState.POSSIBLE
+
+    body = value[1:] if value.startswith("-") else value
+    if body == "":
+        return ValidationState.INVALID
+
+    if body != "0" and body.startswith("0"):
+        return ValidationState.INVALID
+    if not all(c in JsonRules.ASCII_DIGITS for c in body):
+        return ValidationState.INVALID
+
+    return ValidationState.VALID
+
+
 def validate_boolean(value: str) -> ValidationState:
     """Validate whether value is a complete or partial JSON boolean."""
     if value in ("true", "false"):
@@ -296,15 +322,12 @@ def validate_null(value: str) -> ValidationState:
 
 
 def validate_value(value: str, expected_type: str) -> ValidationState:
-    """Validate a candidate value against the expected schema type.
-
-    Raises:
-        SchemaRulesError: if ``expected_type`` is not a supported type.
-    """
     if expected_type == "string":
         return validate_string(value)
     if expected_type == "number":
         return validate_number(value)
+    if expected_type == "integer":
+        return validate_integer(value)
     if expected_type == "boolean":
         return validate_boolean(value)
     if expected_type == "null":

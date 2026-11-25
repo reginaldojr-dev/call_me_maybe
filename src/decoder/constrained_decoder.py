@@ -82,5 +82,12 @@ def generate_parameters(
             and not isinstance(parsed[key], bool)
         ):
             parsed[key] = float(parsed[key])
+        elif param_type == "integer" and key in parsed:
+            parsed[key] = int(parsed[key])
+        elif param_type == "integer" and key in parsed:
+            if not isinstance(parsed[key], int):
+                raise JsonStateError(
+                    f"Expected integer for {key!r}, got {parsed[key]!r}"
+                )
 
     return parsed

@@ -46,6 +46,7 @@ def validate_output(
         mapping_dict: dict[str, type] = {
             "string": str,
             "number": float,
+            "integer": int,
             "boolean": bool,
             "null": type(None),
         }
@@ -54,7 +55,7 @@ def validate_output(
                 f"Unknown expected type: {expected_type} for key: {key}."
             )
         if not isinstance(value, mapping_dict[expected_type]) or (
-            expected_type == "number" and isinstance(value, bool)
+            expected_type in ("number", "integer") and isinstance(value, bool)
         ):
             raise OutputError(
                 f"Parameter '{key}' is expected to be of type "
